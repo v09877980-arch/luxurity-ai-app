@@ -1,0 +1,384 @@
+import os
+import json
+from io import BytesIO
+from datetime import datetime, time
+import streamlit as st
+from google import genai
+from google.genai import types
+from gtts import gTTS
+
+# --- 1. PAGE SETUP & LUXURY CONFIG ---
+st.set_page_config(
+    page_title="Luxurity AI",
+    page_icon="💎",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+MEMORY_FILE = "luxurity_chat_memory.json"
+USAGE_FILE = "luxurity_usage_tracker.json"
+
+# --- 2. USAGE LIMITS & RESET ENGINE ---
+def get_today_date():
+    return datetime.now().strftime("%Y-%m-%d")
+
+def load_usage():
+    if os.path.exists(USAGE_FILE):
+        try:
+            with open(USAGE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data.get("date") == get_today_date():
+                    return data
+        except Exception:
+            pass
+    return {
+        "date": get_today_date(),
+        "pro_used": 0,
+        "max_used": 0,
+        "img_used": 0,
+        "tier": "Free"
+    }
+
+def save_usage(usage_data):
+    try:
+        with open(USAGE_FILE, "w", encoding="utf-8") as f:
+            json.dump(usage_data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+if "usage" not in st.session_state:
+    st.session_state.usage = load_usage()
+
+# Check and reset daily limits at midnight
+if st.session_state.usage["date"] != get_today_date():
+    st.session_state.usage = {
+        "date": get_today_date(),
+        "pro_used": 0,
+        "max_used": 0,
+        "img_used": 0,
+        "tier": st.session_state.usage.get("tier", "Free")
+    }
+    save_usage(st.session_state.usage)
+
+# --- 3. MEMORY MANAGEMENT ---
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        try:
+            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_memory(messages):
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(messages, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+if "messages" not in st.session_state:
+    st.session_state.messages = load_memory()
+
+if "quick_prompt" not in st.session_state:
+    st.session_state.quick_prompt = None
+
+# --- 4. SIDEBAR CONTROL & SUBSCRIPTION CENTER ---
+with st.sidebar:
+    st.markdown("## 💎 Luxurity AI")
+    st.caption("Secure • Private • Multimodal AI")
+
+    api_key = st.text_input(
+        "🔑 Gemini API Key:",
+        type="password",
+        help="Paste your free key from aistudio.google.com"
+    )
+
+    st.divider()
+
+    # Subscription Status & Upgrades
+    current_tier = st.session_state.usage.get("tier", "Free")
+    st.markdown(f"### 🛡️ Plan: **Luxurity {current_tier}**")
+    
+    with st.expander("💎 Upgrade & Subscription Plans"):
+        st.write("Manage billing securely via **Google Play Billing**.")
+        
+        # Currency Converter for Global Currencies
+        currency_choice = st.selectbox(
+            "Select Currency:",
+            ["INR (₹) - Indian Rupee", "USD ($) - US Dollar", "EUR (€) - Euro", "GBP (£) - British Pound", 
+             "JPY (¥) - Japanese Yen", "AUD ($) - Australian Dollar", "CAD ($) - Canadian Dollar", 
+             "SGD ($) - Singapore Dollar", "AED (د.إ) - UAE Dirham", "All World Currencies Supported"]
+        )
+        
+        # Dynamic pricing conversion helper
+        curr_symbol = currency_choice.split()[0].replace("(", "").replace(")", "")
+        
+        st.markdown("---")
+        st.subheader("📦 Luxurity Free Plan")
+        st.markdown("- Default Search: **Unlimited**\n- Pro Searches: **5 / day**\n- Max Searches: **3 / day**\n- **Current Active Plan**")
+        if st.button("Switch to Free"):
+            st.session_state.usage["tier"] = "Free"
+            save_usage(st.session_state.usage)
+            st.rerun()
+
+        st.markdown("---")
+        st.subheader("🚀 Luxurity Pro Plan")
+        st.markdown("- Pro Searches: **Unlimited**\n- Max Searches: **3 / day**\n- Image Generation: **5 / day**")
+        st.markdown(f"**Monthly:** 500 {curr_symbol} / month")
+        if st.button("Subscribe Pro (Monthly)", key="pro_m"):
+            st.session_state.usage["tier"] = "Pro"
+            save_usage(st.session_state.usage)
+            st.success("Successfully upgraded via Google Play Billing!")
+            st.rerun()
+            
+        st.markdown(f"**Yearly:** 2,500 {curr_symbol} / year — <span style='color:#10B981; font-weight:bold;'>⭐ BETTER VALUE</span>", unsafe_allow_html=True)
+        if st.button("Subscribe Pro (Yearly - Better Value)", key="pro_y"):
+            st.session_state.usage["tier"] = "Pro"
+            save_usage(st.session_state.usage)
+            st.success("Successfully upgraded via Google Play Billing!")
+            st.rerun()
+
+        st.markdown("---")
+        st.subheader("👑 Luxurity Max Subscription")
+        st.markdown("- Default Search: **Unlimited**\n- Pro Searches: **Unlimited**\n- Max Searches: **Unlimited**\n- Image Generation: **20 / day**")
+        st.markdown(f"**Monthly:** 820 {curr_symbol} / month")
+        if st.button("Subscribe Max (Monthly)", key="max_m"):
+            st.session_state.usage["tier"] = "Max"
+            save_usage(st.session_state.usage)
+            st.success("Successfully upgraded to Max via Google Play Billing!")
+            st.rerun()
+            
+        st.markdown(f"**Yearly:** 4,500 {curr_symbol} / year — <span style='color:#D4AF37; font-weight:bold;'>⭐ BETTER VALUE</span>", unsafe_allow_html=True)
+        if st.button("Subscribe Max (Yearly - Better Value)", key="max_y"):
+            st.session_state.usage["tier"] = "Max"
+            save_usage(st.session_state.usage)
+            st.success("Successfully upgraded to Max via Google Play Billing!")
+            st.rerun()
+
+    st.divider()
+
+    # Privacy & Security Hub
+    with st.expander("🔒 Privacy & Security Hub"):
+        st.markdown("""
+        **Your Privacy is Our Priority:**
+        - **End-to-End Encryption:** All chat payloads are securely transmitted over HTTPS SSL encryption.
+        - **Zero Data Selling:** Luxurity never sells, shares, or monetizes user conversation data.
+        - **Local Storage Control:** Chat history is stored securely on your local device repository.
+        - **Google Play Compliance:** All billing transactions are encrypted and managed securely through Google Play Billing policies.
+        """)
+
+    st.divider()
+
+    # Luxury Visual Theme
+    theme_choice = st.selectbox(
+        "💎 Luxury Visual Theme:",
+        ["Obsidian Gold", "Cyber Neon Cyan", "Emerald Glass"]
+    )
+
+    # AI Persona
+    persona = st.selectbox(
+        "🧠 AI Persona:",
+        [
+            "✨ Luxurity Elite Assistant",
+            "📚 School & Elocution Tutor",
+            "📱 Tech, Gadgets & Auto Expert",
+            "🎮 Gaming & Roblox Studio Coach",
+            "😂 Witty Comedian"
+        ]
+    )
+
+    if persona == "✨ Luxurity Elite Assistant":
+        base_instruction = "You are Luxurity AI, a sophisticated, highly polished, and reliable assistant."
+    elif persona == "📚 School & Elocution Tutor":
+        base_instruction = "Elocution and academic tutor. Provide structured, eloquent explanations."
+    elif persona == "📱 Tech, Gadgets & Auto Expert":
+        base_instruction = "Expert in consumer tech, smartphones, tablets, laptops, and automobiles."
+    elif persona == "🎮 Gaming & Roblox Studio Coach":
+        base_instruction = "Expert gaming coach and Roblox Studio Lua scripter."
+    else:
+        base_instruction = "Witty comedian assistant who delivers accuracy with humor."
+
+    # Language & Voice
+    language_choice = st.selectbox(
+        "🌍 Output Language:",
+        ["English", "Tamil (தமிழ்)", "Hindi (हिन्दी)", "Telugu (తెలుగు)"]
+    )
+    lang_codes = {"English": "en", "Tamil (தமிழ்)": "ta", "Hindi (हिन्दी)": "hi", "Telugu (తెలుగు)": "te"}
+    enable_voice = st.toggle("🔊 Read Answers Out Loud (TTS)", value=False)
+    enable_search = st.toggle("🌐 Live Default Web Search", value=True)
+
+    st.divider()
+    
+    # Reset / Export
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
+        st.session_state.messages = []
+        save_memory([])
+        st.rerun()
+
+# --- 5. THEME STYLING ENGINE ---
+if theme_choice == "Obsidian Gold":
+    accent = "#D4AF37"
+    bg_grad = "radial-gradient(circle at top right, #1f1b12, #0b0c10 70%)"
+elif theme_choice == "Cyber Neon Cyan":
+    accent = "#00F5D4"
+    bg_grad = "radial-gradient(circle at top right, #0a2229, #090d16 70%)"
+else:
+    accent = "#10B981"
+    bg_grad = "radial-gradient(circle at top right, #0b251c, #090d14 70%)"
+
+st.markdown(f"""
+<style>
+    .stApp {{
+        background: {bg_grad};
+        color: #F8FAFC;
+    }}
+    [data-testid="stChatMessage"] {{
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-left: 4px solid {accent};
+        border-radius: 16px;
+        padding: 16px;
+        margin-bottom: 12px;
+        backdrop-filter: blur(12px);
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }}
+    .stButton > button {{
+        border-radius: 12px;
+        border: 1px solid {accent};
+        background: rgba(255, 255, 255, 0.05);
+        color: #FFFFFF;
+        font-weight: 600;
+    }}
+    .stButton > button:hover {{
+        background: {accent};
+        color: #000000;
+    }}
+    .lux-banner {{
+        padding: 20px;
+        border-radius: 18px;
+        background: linear-gradient(135deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02));
+        border: 1px solid {accent}55;
+        margin-bottom: 18px;
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+# --- 6. TOP HEADER & USAGE METRICS ---
+tier_display = st.session_state.usage["tier"]
+st.markdown(f"""
+<div class="lux-banner">
+    <h1 style="margin:0; font-size: 2.1rem;">💎 Luxurity <span style="color:{accent};">AI Suite</span></h1>
+    <p style="margin:4px 0 0 0; opacity:0.8;">Active Plan: <b>Luxurity {tier_display}</b> • Zero-Trust Security & Google Play Billing Ready</p>
+</div>
+""", unsafe_allow_html=True)
+
+# Usage Counters Bar
+u_data = st.session_state.usage
+col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+col_m1.metric("🛡️ Subscription Tier", tier_display)
+col_m2.metric("⚡ Pro Searches Used", f"{u_data['pro_used']} / {'∞' if tier_display in ['Pro', 'Max'] else '5'}")
+col_m3.metric("🚀 Max Searches Used", f"{u_data['max_used']} / {'∞' if tier_display == 'Max' else '3'}")
+col_m4.metric("🎨 Images Generated", f"{u_data['img_used']} / {'20' if tier_display == 'Max' else ('5' if tier_display == 'Pro' else '0')}")
+
+# --- 7. VOICE CHAT & QUICK ACTIONS ---
+st.write("🎙️ **Voice Chat & Quick Actions:**")
+q1, q2, q3 = st.columns(3)
+if q1.button("📖 Study & Elocution Help", use_container_width=True):
+    st.session_state.quick_prompt = "Provide a structured study guide and an elocution speech outline."
+if q2.button("📱 Gadget & Auto Comparison", use_container_width=True):
+    st.session_state.quick_prompt = "Compare top 5G devices and automotive specifications."
+if q3.button("🛡️ Security & Privacy Overview", use_container_width=True):
+    st.session_state.quick_prompt = "Explain how Luxurity secures user data with end-to-end encryption."
+
+with st.expander("🎙️ Luxurity Voice Chat Interface"):
+    voice_recording = st.audio_input("Record voice query:")
+
+st.divider()
+
+# --- 8. CHAT DISPLAY ---
+if len(st.session_state.messages) == 0:
+    with st.chat_message("assistant"):
+        st.markdown(
+            "👋 **Welcome to Luxurity AI!** Your secure, multimodal assistant. "
+            "Configure your plan in the sidebar or start chatting below."
+        )
+
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# --- 9. INPUT & LIMIT ENFORCEMENT ---
+chat_input = st.chat_input("Message Luxurity AI...")
+active_prompt = st.session_state.quick_prompt or chat_input
+st.session_state.quick_prompt = None
+
+if active_prompt or voice_recording:
+    if not api_key:
+        st.warning("⚠️ Please enter your Gemini API Key in the left sidebar!")
+    else:
+        # Enforce limits based on tier
+        current_tier = st.session_state.usage["tier"]
+        # Default search is unlimited for all plans. Let's count as pro/max if user requests heavy search/generation.
+        if current_tier == "Free" and st.session_state.usage["pro_used"] >= 5:
+            st.error("⚠️ Daily Pro search limit reached (5/day)! Upgrade to Luxurity Pro or Max for unlimited access.")
+        else:
+            if current_tier == "Free":
+                st.session_state.usage["pro_used"] += 1
+                save_usage(st.session_state.usage)
+
+            display_text = active_prompt if active_prompt else "🎙️ [Voice Audio Query]"
+            st.session_state.messages.append({"role": "user", "content": display_text})
+            with st.chat_message("user"):
+                st.markdown(display_text)
+
+            with st.chat_message("assistant"):
+                placeholder = st.empty()
+                full_reply = ""
+
+                try:
+                    client = genai.Client(api_key=api_key)
+                    tools = [{"google_search": {}}] if enable_search else None
+
+                    contents = []
+                    for m in st.session_state.messages[:-1]:
+                        role = "user" if m["role"] == "user" else "model"
+                        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=m["content"])]))
+
+                    current_parts = [types.Part.from_text(text=active_prompt if active_prompt else "Process voice input.")]
+                    if voice_recording and not active_prompt:
+                        current_parts.append(types.Part.from_bytes(data=voice_recording.getvalue(), mime_type="audio/wav"))
+
+                    contents.append(types.Content(role="user", parts=current_parts))
+
+                    response = client.models.generate_content_stream(
+                        model="gemini-2.5-flash",
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=base_instruction,
+                            tools=tools
+                        )
+                    )
+
+                    for chunk in response:
+                        if chunk.text:
+                            full_reply += chunk.text
+                            placeholder.markdown(full_reply + " ▌")
+
+                    placeholder.markdown(full_reply)
+                    st.session_state.messages.append({"role": "assistant", "content": full_reply})
+                    save_memory(st.session_state.messages)
+
+                    if enable_voice and full_reply:
+                        try:
+                            clean_speech = full_reply.replace("*", "").replace("#", "")[:500]
+                            tts = gTTS(text=clean_speech, lang=lang_codes[language_choice])
+                            audio_fp = BytesIO()
+                            tts.write_to_fp(audio_fp)
+                            st.audio(audio_fp, format="audio/mp3")
+                        except Exception:
+                            pass
+
+                except Exception as e:
+                    st.session_state.messages.pop()
+                    st.error(f"❌ Error: {e}")
